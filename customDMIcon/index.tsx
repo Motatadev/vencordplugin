@@ -271,28 +271,28 @@ function IconModal({ modalProps }: { modalProps: any }) {
     return (
         <Modal
             {...modalProps}
-            title={tab === "icon" ? "Icône Messages Privés" : tab === "bg" ? "Arrière-plan Discord" : "Logo Discord Global"}
-            subtitle="Triple-clic sur le bouton Home pour rouvrir"
+            title={tab === "icon" ? "Direct Messages Icon" : tab === "bg" ? "Discord Background" : "Global Discord Logo"}
+            subtitle="Triple-click Home button to reopen"
             actions={
                 tab === "icon" ? [
-                    { text: "Réinitialiser", variant: "secondary", onClick: handleResetIcon },
-                    { text: "Annuler", variant: "secondary", onClick: modalProps.onClose },
-                    { text: "Appliquer", variant: "primary", onClick: handleApplyIcon, disabled: !inputUrl.trim() },
+                    { text: "Reset", variant: "secondary", onClick: handleResetIcon },
+                    { text: "Cancel", variant: "secondary", onClick: modalProps.onClose },
+                    { text: "Apply", variant: "primary", onClick: handleApplyIcon, disabled: !inputUrl.trim() },
                 ] : tab === "bg" ? [
-                    { text: "Supprimer fond", variant: "secondary", onClick: handleResetBg },
-                    { text: "Annuler", variant: "secondary", onClick: modalProps.onClose },
-                    { text: "Appliquer fond", variant: "primary", onClick: handleApplyBg, disabled: !bgUrl.trim() },
+                    { text: "Remove background", variant: "secondary", onClick: handleResetBg },
+                    { text: "Cancel", variant: "secondary", onClick: modalProps.onClose },
+                    { text: "Apply background", variant: "primary", onClick: handleApplyBg, disabled: !bgUrl.trim() },
                 ] : [
-                    { text: "Réinitialiser", variant: "secondary", onClick: handleResetDiscordLogo },
-                    { text: "Annuler", variant: "secondary", onClick: modalProps.onClose },
-                    { text: "Appliquer logo", variant: "primary", onClick: handleApplyDiscordLogo, disabled: !discordUrl.trim() },
+                    { text: "Reset", variant: "secondary", onClick: handleResetDiscordLogo },
+                    { text: "Cancel", variant: "secondary", onClick: modalProps.onClose },
+                    { text: "Apply logo", variant: "primary", onClick: handleApplyDiscordLogo, disabled: !discordUrl.trim() },
                 ]
             }
         >
             {/* Tabs */}
             <Flex gap={6} style={{ marginBottom: 12, flexWrap: "wrap" as const }}>
-                <Button color={tab === "icon" ? Button.Colors.BRAND : Button.Colors.PRIMARY} look={tab === "icon" ? Button.Looks.FILLED : Button.Looks.OUTLINED} onClick={() => setTab("icon")}>🎨 Icône MPs</Button>
-                <Button color={tab === "bg" ? Button.Colors.BRAND : Button.Colors.PRIMARY} look={tab === "bg" ? Button.Looks.FILLED : Button.Looks.OUTLINED} onClick={() => setTab("bg")}>🖼️ Fond</Button>
+                <Button color={tab === "icon" ? Button.Colors.BRAND : Button.Colors.PRIMARY} look={tab === "icon" ? Button.Looks.FILLED : Button.Looks.OUTLINED} onClick={() => setTab("icon")}>🎨 DM Icon</Button>
+                <Button color={tab === "bg" ? Button.Colors.BRAND : Button.Colors.PRIMARY} look={tab === "bg" ? Button.Looks.FILLED : Button.Looks.OUTLINED} onClick={() => setTab("bg")}>🖼️ Background</Button>
                 <Button color={tab === "discord" ? Button.Colors.BRAND : Button.Colors.PRIMARY} look={tab === "discord" ? Button.Looks.FILLED : Button.Looks.OUTLINED} onClick={() => setTab("discord")}>💠 Logo Discord</Button>
             </Flex>
 
@@ -307,15 +307,15 @@ function IconModal({ modalProps }: { modalProps: any }) {
                             border: "2px solid var(--border-subtle)", flexShrink: 0
                         }} />
                         <div style={{ flex: 1 }}>
-                            <Forms.FormTitle tag="h5">Prévisualisation</Forms.FormTitle>
-                            <Forms.FormText>{preview ? "Rendu à la place du logo Discord" : "Aucune icône"}</Forms.FormText>
+                            <Forms.FormTitle tag="h5">Preview</Forms.FormTitle>
+                            <Forms.FormText>{preview ? "Shown instead of Discord logo" : "No icon"}</Forms.FormText>
                         </div>
                     </Flex>
                     <div>
-                        <Forms.FormTitle tag="h5">URL de l'image</Forms.FormTitle>
+                        <Forms.FormTitle tag="h5">Image URL</Forms.FormTitle>
                         <TextInput placeholder="https://i.imgur.com/...png" value={inputUrl} onChange={setInputUrl} />
                         <Flex gap={8} style={{ marginTop: 8 }}>
-                            <Button size={Button.Sizes.SMALL} onClick={handleSaveIcon} disabled={!inputUrl.trim()}>Sauvegarder dans la galerie</Button>
+                            <Button size={Button.Sizes.SMALL} onClick={handleSaveIcon} disabled={!inputUrl.trim()}>Save to gallery</Button>
                         </Flex>
                     </div>
                     <div
@@ -329,19 +329,19 @@ function IconModal({ modalProps }: { modalProps: any }) {
                         }}
                         onClick={() => { const i = document.createElement("input"); i.type = "file"; i.accept = "image/*"; i.onchange = () => { const f = i.files?.[0]; if (f) handleFile(f, setInputUrl); }; i.click(); }}
                     >
-                        <div style={{ fontWeight: 600 }}>📁 Clique ou glisse une image ici</div>
+                        <div style={{ fontWeight: 600 }}>📁 Click or drag an image here</div>
                         <div style={{ fontSize: 12, opacity: 0.6 }}>PNG, JPG, GIF, WEBP → base64</div>
                     </div>
                     <div>
-                        <Forms.FormTitle tag="h5">Galerie icônes ({saved.length})</Forms.FormTitle>
-                        {saved.length === 0 ? <div style={{ opacity: 0.6, fontSize: 13, padding: 8, border: "1px solid var(--border-subtle)", borderRadius: 6 }}>Aucune icône sauvegardée.</div> : (
+                        <Forms.FormTitle tag="h5">Saved icons ({saved.length})</Forms.FormTitle>
+                        {saved.length === 0 ? <div style={{ opacity: 0.6, fontSize: 13, padding: 8, border: "1px solid var(--border-subtle)", borderRadius: 6 }}>No icon sauvegardée.</div> : (
                             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(80px, 1fr))", gap: 8, maxHeight: 180, overflowY: "auto", padding: 4 }}>
                                 {saved.map(item => (
                                     <div key={item.id} style={{ border: "1px solid var(--border-subtle)", borderRadius: 8, padding: 6, textAlign: "center" as const, background: "var(--background-secondary)" }}>
                                         <div onClick={() => setInputUrl(item.url)} style={{ width: "100%", aspectRatio: "1", borderRadius: 12, backgroundImage: `url("${item.url.replace(/"/g, '\\"')}")`, backgroundSize: "cover", backgroundPosition: "center", cursor: "pointer", border: inputUrl === item.url ? "2px solid var(--brand-500)" : "2px solid transparent" }} />
                                         <div style={{ fontSize: 11, marginTop: 4, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.name}</div>
                                         <Flex gap={4} justifyContent="center" style={{ marginTop: 4 }}>
-                                            <Button size={Button.Sizes.TINY} onClick={() => setInputUrl(item.url)}>Charger</Button>
+                                            <Button size={Button.Sizes.TINY} onClick={() => setInputUrl(item.url)}>Load</Button>
                                             <Button size={Button.Sizes.TINY} color={Button.Colors.RED} look={Button.Looks.LINK} onClick={() => handleDelete(item.id)}>X</Button>
                                         </Flex>
                                     </div>
@@ -365,7 +365,7 @@ function IconModal({ modalProps }: { modalProps: any }) {
                         <Forms.FormTitle tag="h5">URL arrière-plan</Forms.FormTitle>
                         <TextInput placeholder="https://images.unsplash.com/..." value={bgUrl} onChange={setBgUrl} />
                         <Flex gap={8} style={{ marginTop: 8 }}>
-                            <Button size={Button.Sizes.SMALL} onClick={handleSaveBg} disabled={!bgUrl.trim()}>Sauvegarder ce fond</Button>
+                            <Button size={Button.Sizes.SMALL} onClick={handleSaveBg} disabled={!bgUrl.trim()}>Save this background</Button>
                         </Flex>
                     </div>
                     <div
@@ -379,44 +379,44 @@ function IconModal({ modalProps }: { modalProps: any }) {
                         }}
                         onClick={() => { const i = document.createElement("input"); i.type = "file"; i.accept = "image/*"; i.onchange = () => { const f = i.files?.[0]; if (f) handleFile(f, setBgUrl); }; i.click(); }}
                     >
-                        <div style={{ fontWeight: 600 }}>📁 Clique ou glisse un fond ici</div>
+                        <div style={{ fontWeight: 600 }}>📁 Click or drag a background here</div>
                     </div>
 
                     {/* Sliders */}
                     <div style={{ display: "flex", flexDirection: "column", gap: 12, background: "var(--background-secondary)", padding: 12, borderRadius: 8 }}>
                         <div>
-                            <Forms.FormTitle tag="h5">Opacité image : {bgSettings.opacity}%</Forms.FormTitle>
+                            <Forms.FormTitle tag="h5">Image opacity : {bgSettings.opacity}%</Forms.FormTitle>
                             <input type="range" min={0} max={100} value={bgSettings.opacity} onChange={e => setBgSettings({ ...bgSettings, opacity: parseInt(e.target.value) })} style={{ width: "100%" }} />
                             <Forms.FormText>0% = invisible, 100% = opaque</Forms.FormText>
                         </div>
                         <div>
-                            <Forms.FormTitle tag="h5">Transparence panels Discord : {bgSettings.panelOpacity}%</Forms.FormTitle>
+                            <Forms.FormTitle tag="h5">Panel transparency : {bgSettings.panelOpacity}%</Forms.FormTitle>
                             <input type="range" min={20} max={100} value={bgSettings.panelOpacity} onChange={e => setBgSettings({ ...bgSettings, panelOpacity: parseInt(e.target.value) })} style={{ width: "100%" }} />
                             <Forms.FormText>75% = semi-transparent (recommandé), 100% = opaque</Forms.FormText>
                         </div>
                         <div>
-                            <Forms.FormTitle tag="h5">Flou : {bgSettings.blur}px</Forms.FormTitle>
+                            <Forms.FormTitle tag="h5">Blur : {bgSettings.blur}px</Forms.FormTitle>
                             <input type="range" min={0} max={20} value={bgSettings.blur} onChange={e => setBgSettings({ ...bgSettings, blur: parseInt(e.target.value) })} style={{ width: "100%" }} />
                         </div>
                         <div>
-                            <Forms.FormTitle tag="h5">Luminosité : {bgSettings.brightness}%</Forms.FormTitle>
+                            <Forms.FormTitle tag="h5">Brightness : {bgSettings.brightness}%</Forms.FormTitle>
                             <input type="range" min={50} max={130} value={bgSettings.brightness} onChange={e => setBgSettings({ ...bgSettings, brightness: parseInt(e.target.value) })} style={{ width: "100%" }} />
                         </div>
                         <Flex gap={8}>
-                            <Button size={Button.Sizes.SMALL} onClick={async () => { await DataStore.set(DATA_BG_SETTINGS, bgSettings); if (bgUrl.trim()) applyBackground(bgUrl.trim(), bgSettings); }}>Prévisualiser</Button>
+                            <Button size={Button.Sizes.SMALL} onClick={async () => { await DataStore.set(DATA_BG_SETTINGS, bgSettings); if (bgUrl.trim()) applyBackground(bgUrl.trim(), bgSettings); }}>Preview</Button>
                             <Button size={Button.Sizes.SMALL} color={Button.Colors.TRANSPARENT} look={Button.Looks.LINK} onClick={() => setBgSettings(DEFAULT_BG_SETTINGS)}>Reset sliders</Button>
                         </Flex>
                     </div>
 
                     <div>
-                        <Forms.FormTitle tag="h5">Fonds sauvegardés ({bgSaved.length})</Forms.FormTitle>
-                        {bgSaved.length === 0 ? <div style={{ opacity: 0.6, fontSize: 13, padding: 8, border: "1px solid var(--border-subtle)", borderRadius: 6 }}>Aucun fond sauvegardé.</div> : (
+                        <Forms.FormTitle tag="h5">Saved backgrounds ({bgSaved.length})</Forms.FormTitle>
+                        {bgSaved.length === 0 ? <div style={{ opacity: 0.6, fontSize: 13, padding: 8, border: "1px solid var(--border-subtle)", borderRadius: 6 }}>No saved backgrounds.</div> : (
                             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(100px, 1fr))", gap: 8, maxHeight: 150, overflowY: "auto" }}>
                                 {bgSaved.map(item => (
                                     <div key={item.id} style={{ border: "1px solid var(--border-subtle)", borderRadius: 8, padding: 6, background: "var(--background-secondary)" }}>
                                         <div onClick={() => setBgUrl(item.url)} style={{ width: "100%", height: 60, borderRadius: 6, backgroundImage: `url("${item.url.replace(/"/g, '\\"')}")`, backgroundSize: "cover", backgroundPosition: "center", cursor: "pointer" }} />
                                         <Flex gap={4} justifyContent="center" style={{ marginTop: 4 }}>
-                                            <Button size={Button.Sizes.TINY} onClick={() => setBgUrl(item.url)}>Charger</Button>
+                                            <Button size={Button.Sizes.TINY} onClick={() => setBgUrl(item.url)}>Load</Button>
                                             <Button size={Button.Sizes.TINY} color={Button.Colors.RED} look={Button.Looks.LINK} onClick={() => handleDeleteBg(item.id)}>X</Button>
                                         </Flex>
                                     </div>
@@ -437,16 +437,16 @@ function IconModal({ modalProps }: { modalProps: any }) {
                             animation: discordUrl.trim() ? "vc-discord-pulse 1.8s ease-in-out infinite" : undefined
                         }} />
                         <div style={{ flex: 1 }}>
-                            <Forms.FormTitle tag="h5">Logo Discord global</Forms.FormTitle>
+                            <Forms.FormTitle tag="h5">Global Discord logo</Forms.FormTitle>
                             <Forms.FormText>Remplace TOUS les logos Discord (splash au lancement + écrans de chargement) en gardant l'animation pulse</Forms.FormText>
                         </div>
                     </Flex>
                     <div>
-                        <Forms.FormTitle tag="h5">URL du logo</Forms.FormTitle>
+                        <Forms.FormTitle tag="h5">Logo URL</Forms.FormTitle>
                         <TextInput placeholder="https://i.imgur.com/...png" value={discordUrl} onChange={setDiscordUrl} />
                         <Forms.FormText>Utilise la même image que l'icône MPs ou une autre. Tu peux aussi utiliser un GIF animé !</Forms.FormText>
                         <Flex gap={8} style={{ marginTop: 8 }}>
-                            <Button size={Button.Sizes.SMALL} onClick={() => setDiscordUrl(inputUrl)} disabled={!inputUrl.trim()}>Utiliser l'icône MPs</Button>
+                            <Button size={Button.Sizes.SMALL} onClick={() => setDiscordUrl(inputUrl)} disabled={!inputUrl.trim()}>Use DM icon</Button>
                         </Flex>
                     </div>
                     <div
@@ -460,12 +460,12 @@ function IconModal({ modalProps }: { modalProps: any }) {
                         }}
                         onClick={() => { const i = document.createElement("input"); i.type = "file"; i.accept = "image/*"; i.onchange = () => { const f = i.files?.[0]; if (f) { const r = new FileReader(); r.onload = () => setDiscordUrl(r.result as string); r.readAsDataURL(f); } }; i.click(); }}
                     >
-                        <div style={{ fontWeight: 600 }}>📁 Clique ou glisse le logo ici</div>
-                        <div style={{ fontSize: 12, opacity: 0.6 }}>PNG / GIF / WEBP animé gardé</div>
+                        <div style={{ fontWeight: 600 }}>📁 Click or drag logo here</div>
+                        <div style={{ fontSize: 12, opacity: 0.6 }}>PNG / GIF / WEBP (animated kept)</div>
                     </div>
                     <div style={{ background: "var(--background-secondary)", padding: 10, borderRadius: 8, fontSize: 13 }}>
-                        <b>Pour le Bureau (raccourci) :</b> L'icône du raccourci Windows n'est pas dans Discord.<br />
-                        Après avoir appliqué le logo ici, clique <b>Appliquer logo</b> puis je te génère le <b>.ico pour le Bureau</b> sur demande — dis-moi et je change ton raccourci automatiquement.
+                        <b>For Desktop (shortcut):</b> Windows shortcut icon is not inside Discord.<br />
+                        Après avoir appliqué le logo ici, clique <b>Apply logo</b> puis je te génère le <b>.ico pour le Bureau</b> sur demande — dis-moi et je change ton raccourci automatiquement.
                     </div>
                 </Flex>
             )}
@@ -479,12 +479,12 @@ function openIconModal() {
 
 export default definePlugin({
     name: "CustomDMIcon",
-    description: "Triple-clic icône MPs + arrière-plan Discord avec réglage transparence/blur.",
+    description: "Triple-click DM icon + background with transparency/blur.",
     authors: [{ name: "Motata", id: 0n }],
     tags: ["ui", "customization"],
 
     toolboxActions: {
-        "Changer icône / Fond": openIconModal
+        "Change icon / Background": openIconModal
     },
 
     async start() {
