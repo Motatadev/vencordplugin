@@ -7,13 +7,13 @@ import { Margins } from "@utils/margins";
 import definePlugin, { OptionType } from "@utils/types";
 import { Activity } from "@vencord/discord-types";
 import { ActivityType } from "@vencord/discord-types/enums";
-import { Button, Forms, TextInput, Select, Switch, Text, FluxDispatcher, UserStore } from "@webpack/common";
+import { Button, Forms, TextInput, Select, Switch, Text, FluxDispatcher, UserStore, Modal, openModal } from "@webpack/common";
 import { React, useEffect, useState } from "@webpack/common";
 
 const ShowCurrentGame = getUserSettingLazy<boolean>("status", "showCurrentGame")!;
 
-const PRESETS_KEY = "ultraCustomRPC_presets";
-const ACTIVE_PRESET_KEY = "ultraCustomRPC_active";
+const PRESETS_KEY = "customRPC2_presets";
+const ACTIVE_PRESET_KEY = "customRPC2_active";
 
 // Helper: external image -> mp:external/<b64>
 function toExternalImage(url: string): string {
@@ -87,17 +87,17 @@ async function createActivityFromStore(s: any): Promise<Activity | undefined> {
 export async function setRpc(disable?: boolean) {
     const s = settings.store as any;
     if (disable || !s.enabled) {
-        FluxDispatcher.dispatch({ type: "LOCAL_ACTIVITY_UPDATE", activity: null, socketId: "UltraCustomRPC" });
+        FluxDispatcher.dispatch({ type: "LOCAL_ACTIVITY_UPDATE", activity: null, socketId: "CustomRPC2" });
         return;
     }
     const activity = await createActivityFromStore(s);
-    FluxDispatcher.dispatch({ type: "LOCAL_ACTIVITY_UPDATE", activity: activity || null, socketId: "UltraCustomRPC" });
+    FluxDispatcher.dispatch({ type: "LOCAL_ACTIVITY_UPDATE", activity: activity || null, socketId: "CustomRPC2" });
 }
 
 export const settings = definePluginSettings({
     enabled: { type: OptionType.BOOLEAN, description: "Enable RPC", default: true },
     appID: { type: OptionType.STRING, description: "Application ID (optional, 0 for external images)", default: "" },
-    appName: { type: OptionType.STRING, description: "Application Name", default: "Ultra Custom RPC" },
+    appName: { type: OptionType.STRING, description: "Application Name", default: "CustomRPC2" },
     type: { type: OptionType.SELECT, description: "Activity Type", options: [
         { label: "Playing", value: ActivityType.PLAYING, default: true },
         { label: "Streaming", value: ActivityType.STREAMING },
@@ -293,9 +293,92 @@ function RPCSettingsPanel() {
     );
 }
 
+
+function CustomRPC2Modal({ modalProps }: { modalProps: any }) {
+    const [tab, setTab] = React.useState<"main"|"images"|"buttons"|"time"|"presets">("main");
+    const s = settings.use();
+    const [local, setLocal] = React.useState<any>({ ...settings.store });
+    React.useEffect(() => { setLocal({ ...settings.store }); }, [JSON.stringify(s)]);
+
+    const update = (k: string, v: any) => {
+        const next = { ...local, [k]: v };
+        setLocal(next);
+    };
+    const apply = async () => {
+        for (const k in local) (settings.store as any)[k] = local[k];
+        await setRpc();
+        modalProps.onClose();
+    };
+    const previewActivity = { ...local };
+
+    return (
+        <Modal {...modalProps} title="CustomRPC2 — Editor" subtitle="Fully customizable RPC • Visible to everyone if Activity Sharing is enabled" actions={[
+            { text: "Cancel", variant: "secondary", onClick: modalProps.onClose },
+            { text: "Save & Apply", variant: "primary", onClick: apply },
+        ]}>
+            <Flex gap={6} style={{ marginBottom: 12, flexWrap: "wrap" as const }}>
+                <Button color={tab==="main"?Button.Colors.BRAND:Button.Colors.PRIMARY} look={tab==="main"?Button.Looks.FILLED:Button.Looks.OUTLINED} onClick={()=>setTab("main")}>Main</Button>
+                <Button color={tab==="images"?Button.Colors.BRAND:Button.Colors.PRIMARY} look={tab==="images"?Button.Looks.FILLED:Button.Looks.OUTLINED} onClick={()=>setTab("images")}>Images</Button>
+                <Button color={tab==="buttons"?Button.Colors.BRAND:Button.Colors.PRIMARY} look={tab==="buttons"?Button.Looks.FILLED:Button.Looks.OUTLINED} onClick={()=>setTab("buttons")}>Buttons</Button>
+                <Button color={tab==="time"?Button.Colors.BRAND:Button.Colors.PRIMARY} look={tab==="time"?Button.Looks.FILLED:Button.Looks.OUTLINED} onClick={()=>setTab("time")}>Time/Party</Button>
+                <Button color={tab==="presets"?Button.Colors.BRAND:Button.Colors.PRIMARY} look={tab==="presets"?Button.Looks.FILLED:Button.Looks.OUTLINED} onClick={()=>setTab("presets")}>Presets</Button>
+            </Flex>
+
+            {tab==="main" && (
+                <Flex flexDirection="column" gap={10}>
+                    <Flex gap={8}><div style={{flex:1}}><Forms.FormTitle tag="h5">App Name *</Forms.FormTitle><TextInput value={local.appName} onChange={v=>update("appName", v)} placeholder="My Activity" /></div><div style={{flex:1}}><Forms.FormTitle tag="h5">App ID (0 for external images)</Forms.FormTitle><TextInput value={local.appID} onChange={v=>update("appID", v)} placeholder="0" /></div></Flex>
+                    <Select options={[{label:"🎮 Playing",value:0},{label:"🔴 Streaming",value:1},{label:"🎵 Listening",value:2},{label:"👀 Watching",value:3},{label:"🏆 Competing",value:5}]} select={v=>update("type", v)} isSelected={v=>v===local.type} serialize={v=>String(v)} />
+                    <Flex gap={8}><div style={{flex:1}}><Forms.FormTitle tag="h5">Details (line 1)</Forms.FormTitle><TextInput value={local.details} onChange={v=>update("details", v)} /></div><div style={{flex:1}}><Forms.FormTitle tag="h5">State (line 2)</Forms.FormTitle><TextInput value={local.state} onChange={v=>update("state", v)} /></div></Flex>
+                    <Flex gap={8}><div style={{flex:1}}><Forms.FormTitle tag="h5">Details URL</Forms.FormTitle><TextInput value={local.detailsURL} onChange={v=>update("detailsURL", v)} placeholder="https://" /></div><div style={{flex:1}}><Forms.FormTitle tag="h5">State URL</Forms.FormTitle><TextInput value={local.stateURL} onChange={v=>update("stateURL", v)} placeholder="https://" /></div></Flex>
+                    {local.type===1 && <div><Forms.FormTitle tag="h5">Stream URL</Forms.FormTitle><TextInput value={local.streamLink} onChange={v=>update("streamLink", v)} placeholder="https://twitch.tv/..." /></div>}
+                </Flex>
+            )}
+            {tab==="images" && (
+                <Flex flexDirection="column" gap={10}>
+                    <Forms.FormText>Paste <b>https://</b> for external images (no upload needed) or Discord asset key.</Forms.FormText>
+                    <Flex gap={8}><div style={{flex:1}}><Forms.FormTitle tag="h5">Large Image</Forms.FormTitle><TextInput value={local.imageBig} onChange={v=>update("imageBig", v)} placeholder="https://i.imgur.com/... or key" /></div><div style={{flex:1}}><Forms.FormTitle tag="h5">Tooltip</Forms.FormTitle><TextInput value={local.imageBigTooltip} onChange={v=>update("imageBigTooltip", v)} /></div></Flex>
+                    <TextInput value={local.imageBigURL} onChange={v=>update("imageBigURL", v)} placeholder="Large click URL" />
+                    <Flex gap={8}><div style={{flex:1}}><Forms.FormTitle tag="h5">Small Image</Forms.FormTitle><TextInput value={local.imageSmall} onChange={v=>update("imageSmall", v)} /></div><div style={{flex:1}}><Forms.FormTitle tag="h5">Tooltip</Forms.FormTitle><TextInput value={local.imageSmallTooltip} onChange={v=>update("imageSmallTooltip", v)} /></div></Flex>
+                    <TextInput value={local.imageSmallURL} onChange={v=>update("imageSmallURL", v)} placeholder="Small click URL" />
+                </Flex>
+            )}
+            {tab==="buttons" && (
+                <Flex flexDirection="column" gap={10}>
+                    <Forms.FormText>Up to 2 buttons — visible to everyone (hidden on your own profile, visible to others).</Forms.FormText>
+                    <Flex gap={8}><div style={{flex:1}}><Forms.FormTitle tag="h5">Button 1 Text</Forms.FormTitle><TextInput value={local.buttonOneText} onChange={v=>update("buttonOneText", v)} maxLength={31} /></div><div style={{flex:1}}><Forms.FormTitle tag="h5">URL</Forms.FormTitle><TextInput value={local.buttonOneURL} onChange={v=>update("buttonOneURL", v)} placeholder="https://" /></div></Flex>
+                    <Flex gap={8}><div style={{flex:1}}><Forms.FormTitle tag="h5">Button 2 Text</Forms.FormTitle><TextInput value={local.buttonTwoText} onChange={v=>update("buttonTwoText", v)} maxLength={31} /></div><div style={{flex:1}}><Forms.FormTitle tag="h5">URL</Forms.FormTitle><TextInput value={local.buttonTwoURL} onChange={v=>update("buttonTwoURL", v)} placeholder="https://" /></div></Flex>
+                </Flex>
+            )}
+            {tab==="time" && (
+                <Flex flexDirection="column" gap={10}>
+                    <Flex gap={8}><div style={{flex:1}}><Forms.FormTitle tag="h5">Party Size</Forms.FormTitle><TextInput value={String(local.partySize||"")} onChange={v=>update("partySize", parseInt(v)||0)} /></div><div style={{flex:1}}><Forms.FormTitle tag="h5">Max</Forms.FormTitle><TextInput value={String(local.partyMaxSize||"")} onChange={v=>update("partyMaxSize", parseInt(v)||0)} /></div></Flex>
+                    <Select options={[{label:"No timestamp",value:0},{label:"Since now",value:1},{label:"Since day start",value:2},{label:"Custom",value:3}]} select={v=>update("timestampMode", v)} isSelected={v=>v===local.timestampMode} serialize={v=>String(v)} />
+                </Flex>
+            )}
+            {tab==="presets" && (
+                <PresetManager />
+            )}
+
+            {/* Preview */}
+            <div style={{ background: "var(--background-secondary)", padding: 10, borderRadius: 8, marginTop: 12, display: "flex", gap: 10, alignItems: "center" }}>
+                <div style={{ width: 56, height: 56, borderRadius: 8, background: "var(--background-tertiary)", backgroundImage: local.imageBig?.startsWith("http") ? `url(${local.imageBig})` : undefined, backgroundSize: "cover", backgroundPosition: "center" }} />
+                <div>
+                    <div style={{ fontWeight: 700 }}>{local.appName || "App Name"}</div>
+                    <div style={{ fontSize: 13, opacity: 0.9 }}>{local.details || "Details"}</div>
+                    <div style={{ fontSize: 13, opacity: 0.7 }}>{local.state || "State"}</div>
+                </div>
+            </div>
+        </Modal>
+    );
+}
+
+function openCustomRPC2Modal() {
+    openModal(props => <CustomRPC2Modal modalProps={props} />);
+}
+
 export default definePlugin({
-    name: "UltraCustomRPC",
-    description: "Fully customizable RPC visible to everyone — external images, buttons, presets, party, timestamps. More complete than CustomRPC.",
+    name: "CustomRPC2",
+    description: "Fully customizable RPC visible to everyone — external images, buttons, presets, party, timestamps. Clean interface with preview.",
     authors: [Devs.AutumnVN, { name: "Motata", id: 0n }],
     tags: ["Activity"],
     settings,
@@ -303,7 +386,8 @@ export default definePlugin({
     start: () => setRpc(),
     stop: () => setRpc(true),
     toolboxActions: {
-        "Toggle Ultra RPC": () => { (settings.store as any).enabled = !(settings.store as any).enabled; setRpc(!(settings.store as any).enabled); },
+        "Open CustomRPC2": openCustomRPC2Modal,
+        "Toggle RPC": () => { (settings.store as any).enabled = !(settings.store as any).enabled; setRpc(!(settings.store as any).enabled); },
         "Refresh RPC": () => setRpc(),
     },
     settingsAboutComponent: RPCSettingsPanel,
