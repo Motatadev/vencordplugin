@@ -1,7 +1,7 @@
 import { ChatBarButton, ChatBarButtonFactory } from "@api/ChatButtons";
 import { Devs } from "@utils/constants";
 import definePlugin from "@utils/types";
-import { Button, FluxDispatcher, Forms, Constants, RestAPI, SelectedChannelStore, SnowflakeUtils, Toasts, showToast, useState, useEffect, useRef } from "@webpack/common";
+import { Button, FluxDispatcher, Forms, Constants, RestAPI, SelectedChannelStore, SnowflakeUtils, Toasts, showToast, useState, useEffect, useRef, MediaEngineStore } from "@webpack/common";
 import { findLazy } from "@webpack";
 import { CloudUpload as TCloudUpload } from "@vencord/discord-types";
 import { CloudUploadPlatform } from "@vencord/discord-types/enums";
@@ -9,6 +9,7 @@ import { PermissionStore, PermissionsBits } from "@webpack/common";
 import { PendingReplyStore, MessageActions } from "@webpack/common";
 
 const CloudUpload: typeof TCloudUpload = findLazy(m => m.prototype?.trackUploadFinished);
+const Native = (typeof VencordNative !== "undefined" ? (VencordNative as any).pluginHelpers?.VoiceMessages : null) as any;
 
 // Mic icon like mobile
 function MicIcon({ height = 20, width = 20, className }: any) {
@@ -102,10 +103,38 @@ const MobileMicButton: ChatBarButtonFactory = ({ channel }) => {
         startXRef.current = clientX;
         setCancel(false);
         setLocked(false);
+
+        // Desktop: use Discord's native recorder (like VoiceMessages plugin) - respects Discord input device & bypasses browser permission issues
+        if (typeof IS_DISCORD_DESKTOP !== "undefined" && IS_DISCORD_DESKTOP && typeof DiscordNative !== "undefined") {
+            try {
+                const discordVoice = (DiscordNative as any).nativeModules.requireModule("discord_voice");
+                const deviceId = MediaEngineStore.getInputDeviceId();
+                discordVoice.startLocalAudioRecording(
+                    { echoCancellation: true, noiseCancellation: true, deviceId },
+                    (success: boolean) => {
+                        if (!success) {
+                            showToast("Failed to start recording — check Windows Settings → Privacy → Microphone → Allow Discord, and Discord Settings → Voice → Input Device", Toasts.Type.FAILURE);
+                            return;
+                        }
+                        setRecording(true);
+                        const start = Date.now();
+                        timerRef.current = setInterval(() => setElapsed(Math.floor((Date.now() - start) / 1000)), 100);
+                        // Store a marker so stopRecording knows it's native
+                        (recorderRef as any).current = "native";
+                        streamRef.current = null as any;
+                    }
+                );
+                return;
+            } catch (err) {
+                console.error("[MobileVoice] native start failed, falling back to getUserMedia", err);
+            }
+        }
+
+        // Web / fallback
         try {
-            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, deviceId: MediaEngineStore.getInputDeviceId() } as any });
             streamRef.current = stream;
-            const rec = new MediaRecorder(stream, { mimeType: 'audio/ogg; codecs=opus' });
+            const rec = new MediaRecorder(stream, { mimeType: 'audio/ogg; codecs=opus' } as any);
             chunksRef.current = [];
             rec.ondataavailable = ev => { if (ev.data.size) chunksRef.current.push(ev.data); };
             rec.onstop = () => {
@@ -123,14 +152,41 @@ const MobileMicButton: ChatBarButtonFactory = ({ channel }) => {
             setRecording(true);
             const start = Date.now();
             timerRef.current = setInterval(() => setElapsed(Math.floor((Date.now() - start) / 1000)), 100);
-        } catch {
-            showToast("Microphone permission denied", Toasts.Type.FAILURE);
+        } catch (err: any) {
+            console.error(err);
+            showToast("Microphone permission missing — Enable in Windows Settings → Privacy & security → Microphone → Allow Discord, and check Discord Settings → Voice & Video → Input Device", Toasts.Type.FAILURE);
         }
     };
 
     const stopRecording = (isCancel: boolean) => {
         if (isCancel) setCancel(true);
         clearInterval(timerRef.current);
+        // Native desktop path
+        if ((recorderRef as any).current === "native" && typeof DiscordNative !== "undefined") {
+            try {
+                const discordVoice = (DiscordNative as any).nativeModules.requireModule("discord_voice");
+                discordVoice.stopLocalAudioRecording(async (filePath: string) => {
+                    if (filePath && Native) {
+                        try {
+                            const buf = await Native.readRecording(filePath);
+                            if (buf) {
+                                const blob = new Blob([buf], { type: "audio/ogg; codecs=opus" });
+                                if (!isCancel && blob.size > 1000) sendAudio(blob);
+                            } else showToast("Failed to read recording", Toasts.Type.FAILURE);
+                        } catch { showToast("Failed to read recording", Toasts.Type.FAILURE); }
+                    } else if (filePath) {
+                        // fallback: try to read via fetch if Native not available (should not happen)
+                        showToast("Native helper missing — enable VoiceMessages plugin too", Toasts.Type.FAILURE);
+                    }
+                    setRecording(false);
+                    setLocked(false);
+                    setElapsed(0);
+                    setCancel(false);
+                    (recorderRef as any).current = null;
+                });
+                return;
+            } catch {}
+        }
         recorderRef.current?.stop();
     };
 
