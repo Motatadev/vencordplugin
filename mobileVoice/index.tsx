@@ -1,7 +1,6 @@
-import { ChatBarButton, ChatBarButtonFactory } from "@api/ChatButtons";
 import { Devs } from "@utils/constants";
 import definePlugin from "@utils/types";
-import { Button, FluxDispatcher, Forms, Constants, RestAPI, SelectedChannelStore, SnowflakeUtils, Toasts, showToast, useState, useEffect, useRef, MediaEngineStore } from "@webpack/common";
+import { Button, Constants, FluxDispatcher, RestAPI, SelectedChannelStore, SnowflakeUtils, Toasts, showToast } from "@webpack/common";
 import { findLazy } from "@webpack";
 import { CloudUpload as TCloudUpload } from "@vencord/discord-types";
 import { CloudUploadPlatform } from "@vencord/discord-types/enums";
@@ -9,17 +8,6 @@ import { PermissionStore, PermissionsBits } from "@webpack/common";
 import { PendingReplyStore, MessageActions } from "@webpack/common";
 
 const CloudUpload: typeof TCloudUpload = findLazy(m => m.prototype?.trackUploadFinished);
-const Native = (typeof VencordNative !== "undefined" ? (VencordNative as any).pluginHelpers?.VoiceMessages : null) as any;
-
-// Mic icon like mobile
-function MicIcon({ height = 20, width = 20, className }: any) {
-    return (
-        <svg width={width} height={height} viewBox="0 0 24 24" fill="currentColor" className={className}>
-            <path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Z" />
-            <path d="M17 11a5 5 0 0 1-10 0M12 16v4M8 20h8" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" fill="none" />
-        </svg>
-    );
-}
 
 function sendAudio(blob: Blob) {
     const channelId = SelectedChannelStore.getChannelId();
@@ -27,14 +15,12 @@ function sendAudio(blob: Blob) {
     const reply = PendingReplyStore.getPendingReply(channelId);
     if (reply) FluxDispatcher.dispatch({ type: "DELETE_PENDING_REPLY", channelId });
 
-    // Generate waveform + duration
-    const send = async (waveform: string, duration: number) => {
+    const doUpload = async (waveform: string, duration: number) => {
         const upload = new CloudUpload({
             file: new File([blob], "voice-message.ogg", { type: "audio/ogg; codecs=opus" }),
             isThumbnail: false,
             platform: CloudUploadPlatform.WEB,
         }, channelId);
-
         upload.on("complete", () => {
             RestAPI.post({
                 url: Constants.Endpoints.MESSAGES(channelId),
@@ -45,22 +31,15 @@ function sendAudio(blob: Blob) {
                     nonce: SnowflakeUtils.fromTimestamp(Date.now()),
                     sticker_ids: [],
                     type: 0,
-                    attachments: [{
-                        id: "0",
-                        filename: upload.filename,
-                        uploaded_filename: upload.uploadedFilename,
-                        waveform,
-                        duration_secs: duration,
-                    }],
+                    attachments: [{ id: "0", filename: upload.filename, uploaded_filename: upload.uploadedFilename, waveform, duration_secs: duration }],
                     message_reference: reply ? (MessageActions as any).getSendMessageOptionsForReply(reply)?.messageReference : null,
                 }
             });
         });
-        upload.on("error", () => showToast("Failed to upload voice message", Toasts.Type.FAILURE));
+        upload.on("error", () => showToast("Upload failed", Toasts.Type.FAILURE));
         upload.upload();
     };
 
-    // compute waveform
     (async () => {
         try {
             const ctx = new AudioContext();
@@ -68,339 +47,292 @@ function sendAudio(blob: Blob) {
             const data = buf.getChannelData(0);
             const bins = new Uint8Array(Math.min(256, Math.max(32, Math.floor(buf.duration * 10))));
             const spb = Math.floor(data.length / bins.length);
-            for (let i = 0; i < bins.length; i++) {
-                let sum = 0;
-                for (let j = 0; j < spb; j++) sum += data[i * spb + j] ** 2;
-                bins[i] = Math.min(255, Math.sqrt(sum / spb) * 255);
-            }
+            for (let i = 0; i < bins.length; i++) { let s = 0; for (let j = 0; j < spb; j++) s += data[i * spb + j] ** 2; bins[i] = Math.min(255, Math.sqrt(s / spb) * 255); }
             const max = Math.max(...bins);
             const ratio = 1 + (255 / max - 1) * Math.min(1, 100 * (max / 255) ** 3);
             for (let i = 0; i < bins.length; i++) bins[i] = Math.min(255, bins[i] * ratio);
-            const waveform = btoa(String.fromCharCode(...bins));
-            send(waveform, buf.duration);
-        } catch {
-            send("AAAAAAAAAAAA", 1);
-        }
+            doUpload(btoa(String.fromCharCode(...bins)), buf.duration);
+        } catch { doUpload("AAAAAAAAAAAA", 1); }
     })();
 }
 
-const MobileMicButton: ChatBarButtonFactory = ({ channel }) => {
-    const [recording, setRecording] = useState(false);
-    const [locked, setLocked] = useState(false);
-    const [elapsed, setElapsed] = useState(0);
-    const [cancel, setCancel] = useState(false);
-    const [liveBars, setLiveBars] = useState<number[]>(Array(32).fill(4));
-    const [previewBlob, setPreviewBlob] = useState<Blob | null>(null);
-    const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-    const [previewWaveform, setPreviewWaveform] = useState<string | null>(null);
-    const [isPlaying, setIsPlaying] = useState(false);
-    const recorderRef = useRef<MediaRecorder | null>(null);
-    const chunksRef = useRef<Blob[]>([]);
-    const timerRef = useRef<any>(null);
-    const streamRef = useRef<MediaStream | null>(null);
-    const startXRef = useRef(0);
-    const analyserRef = useRef<AnalyserNode | null>(null);
-    const audioCtxRef = useRef<AudioContext | null>(null);
-    const rafRef = useRef<number | null>(null);
-    const audioRef = useRef<HTMLAudioElement | null>(null);
-
-    // Check perms
-    if (channel?.guild_id && !(PermissionStore.can(PermissionsBits.SEND_VOICE_MESSAGES, channel) && PermissionStore.can(PermissionsBits.SEND_MESSAGES, channel))) return null;
-
-    const startRecording = async (e: any) => {
-        const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-        startXRef.current = clientX;
-        setCancel(false);
-        setLocked(false);
-
-        // Desktop: use Discord's native recorder (like VoiceMessages plugin) - respects Discord input device & bypasses browser permission issues
-        if (typeof IS_DISCORD_DESKTOP !== "undefined" && IS_DISCORD_DESKTOP && typeof DiscordNative !== "undefined") {
-            try {
-                const discordVoice = (DiscordNative as any).nativeModules.requireModule("discord_voice");
-                const deviceId = MediaEngineStore.getInputDeviceId();
-                discordVoice.startLocalAudioRecording(
-                    { echoCancellation: true, noiseCancellation: true, deviceId },
-                    (success: boolean) => {
-                        if (!success) {
-                            showToast("Failed to start recording — check Windows Settings → Privacy → Microphone → Allow Discord, and Discord Settings → Voice → Input Device", Toasts.Type.FAILURE);
-                            return;
-                        }
-                        setRecording(true);
-                        const start = Date.now();
-                        timerRef.current = setInterval(() => setElapsed(Math.floor((Date.now() - start) / 1000)), 100);
-                        // Store a marker so stopRecording knows it's native
-                        (recorderRef as any).current = "native";
-                        streamRef.current = null as any;
-                    }
-                );
-                return;
-            } catch (err) {
-                console.error("[MobileVoice] native start failed, falling back to getUserMedia", err);
-            }
-        }
-
-        // Web / fallback with live waveform
-        try {
-            const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, deviceId: MediaEngineStore.getInputDeviceId() } as any });
-            streamRef.current = stream;
-            // live analyser
-            try {
-                const ctx = new AudioContext();
-                audioCtxRef.current = ctx;
-                const src = ctx.createMediaStreamSource(stream);
-                const analyser = ctx.createAnalyser();
-                analyser.fftSize = 256;
-                src.connect(analyser);
-                analyserRef.current = analyser;
-                const data = new Uint8Array(analyser.frequencyBinCount);
-                const tick = () => {
-                    if (!analyserRef.current) return;
-                    analyser.getByteFrequencyData(data);
-                    const bars = [];
-                    const step = Math.floor(data.length / 32);
-                    for (let i = 0; i < 32; i++) {
-                        const v = data[i * step] || 0;
-                        bars.push(4 + (v / 255) * 20);
-                    }
-                    setLiveBars(bars);
-                    rafRef.current = requestAnimationFrame(tick);
-                };
-                tick();
-            } catch {}
-            const rec = new MediaRecorder(stream, { mimeType: 'audio/ogg; codecs=opus' } as any);
-            chunksRef.current = [];
-            rec.ondataavailable = ev => { if (ev.data.size) chunksRef.current.push(ev.data); };
-            rec.onstop = () => {
-                if (rafRef.current) cancelAnimationFrame(rafRef.current);
-                if (audioCtxRef.current) { try { audioCtxRef.current.close(); } catch {} audioCtxRef.current = null; }
-                analyserRef.current = null;
-                setLiveBars(Array(32).fill(4));
-                const blob = new Blob(chunksRef.current, { type: 'audio/ogg; codecs=opus' });
-                stream.getTracks().forEach(t => t.stop());
-                if (cancel || blob.size < 1000) {
-                    setRecording(false); setLocked(false); setElapsed(0); setCancel(false); clearInterval(timerRef.current); return;
-                }
-                // Show preview like mobile - voir en direct
-                const url = URL.createObjectURL(blob);
-                setPreviewBlob(blob);
-                setPreviewUrl(url);
-                // waveform for preview
-                (async () => {
-                    try {
-                        const ctx2 = new AudioContext();
-                        const buf = await ctx2.decodeAudioData(await blob.arrayBuffer());
-                        const data2 = buf.getChannelData(0);
-                        const bins = new Uint8Array(Math.min(32, Math.floor(buf.duration * 10)));
-                        const spb = Math.floor(data2.length / bins.length);
-                        for (let i = 0; i < bins.length; i++) { let sum=0; for(let j=0;j<spb;j++) sum+= data2[i*spb+j]**2; bins[i]=Math.min(255, Math.sqrt(sum/spb)*255); }
-                        setPreviewWaveform(btoa(String.fromCharCode(...bins)));
-                    } catch { setPreviewWaveform(null); }
-                })();
-                setRecording(false);
-                setLocked(false);
-                setElapsed(0);
-                setCancel(false);
-                clearInterval(timerRef.current);
-            };
-            recorderRef.current = rec;
-            rec.start();
-            setRecording(true);
-            const start = Date.now();
-            timerRef.current = setInterval(() => setElapsed(Math.floor((Date.now() - start) / 1000)), 100);
-        } catch (err: any) {
-            console.error(err);
-            showToast("Microphone permission missing — Enable in Windows Settings → Privacy & security → Microphone → Allow Discord, and check Discord Settings → Voice & Video → Input Device", Toasts.Type.FAILURE);
-        }
-    };
-
-    const stopRecording = (isCancel: boolean) => {
-        if (isCancel) setCancel(true);
-        clearInterval(timerRef.current);
-        // Native desktop path
-        if ((recorderRef as any).current === "native" && typeof DiscordNative !== "undefined") {
-            try {
-                const discordVoice = (DiscordNative as any).nativeModules.requireModule("discord_voice");
-                discordVoice.stopLocalAudioRecording(async (filePath: string) => {
-                    if (filePath && Native) {
-                        try {
-                            const buf = await Native.readRecording(filePath);
-                            if (buf) {
-                                const blob = new Blob([buf], { type: "audio/ogg; codecs=opus" });
-                                if (isCancel || blob.size < 1000) { setRecording(false); setLocked(false); setElapsed(0); setCancel(false); (recorderRef as any).current = null; return; }
-                                const url = URL.createObjectURL(blob);
-                                setPreviewBlob(blob);
-                                setPreviewUrl(url);
-                                try {
-                                    const ctx2 = new AudioContext();
-                                    const buf2 = await ctx2.decodeAudioData(await blob.slice().arrayBuffer());
-                                    const data2 = buf2.getChannelData(0);
-                                    const bins = new Uint8Array(Math.min(32, Math.floor(buf2.duration * 10)));
-                                    const spb = Math.floor(data2.length / bins.length);
-                                    for (let i = 0; i < bins.length; i++) { let sum=0; for(let j=0;j<spb;j++) sum+= data2[i*spb+j]**2; bins[i]=Math.min(255, Math.sqrt(sum/spb)*255); }
-                                    setPreviewWaveform(btoa(String.fromCharCode(...bins)));
-                                } catch { setPreviewWaveform(null); }
-                            } else showToast("Failed to read recording", Toasts.Type.FAILURE);
-                        } catch { showToast("Failed to read recording", Toasts.Type.FAILURE); }
-                    } else if (filePath) {
-                        showToast("Native helper missing — enable VoiceMessages plugin too", Toasts.Type.FAILURE);
-                    }
-                    setRecording(false);
-                    setLocked(false);
-                    setElapsed(0);
-                    setCancel(false);
-                    (recorderRef as any).current = null;
-                });
-                return;
-            } catch {}
-        }
-        recorderRef.current?.stop();
-    };
-
-    const onMouseMove = (e: any) => {
-        if (!recording || locked) return;
-        const x = e.touches ? e.touches[0].clientX : e.clientX;
-        const delta = startXRef.current - x;
-        // slide left 80px to cancel like mobile
-        if (delta > 80) {
-            setCancel(true);
-            // visual feedback
-        } else {
-            setCancel(false);
-        }
-        // slide up to lock (like mobile lock)
-        const y = e.touches ? e.touches[0].clientY : e.clientY;
-        if (e.clientY && window.innerHeight - y > 120) {
-            // if dragged up, lock
-        }
-    };
-
-    useEffect(() => {
-        if (recording) {
-            const move = (e: any) => onMouseMove(e);
-            const up = () => {
-                if (!locked) stopRecording(cancel);
-                window.removeEventListener("mousemove", move);
-                window.removeEventListener("mouseup", up);
-                window.removeEventListener("touchmove", move);
-                window.removeEventListener("touchend", up);
-            };
-            window.addEventListener("mousemove", move);
-            window.addEventListener("mouseup", up);
-            window.addEventListener("touchmove", move);
-            window.addEventListener("touchend", up);
-            return () => {
-                window.removeEventListener("mousemove", move);
-                window.removeEventListener("mouseup", up);
-                window.removeEventListener("touchmove", move);
-                window.removeEventListener("touchend", up);
-            };
-        }
-    }, [recording, cancel, locked]);
-
-    const format = (s: number) => `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
-
-    return (
-        <>
-            <ChatBarButton
-                tooltip={recording ? (cancel ? "Release to cancel" : "Release to send — Slide left to cancel") : "Hold to record — Like mobile"}
-                onClick={e => e.preventDefault()}
-                buttonProps={{
-                    onMouseDown: startRecording,
-                    onTouchStart: startRecording,
-                    style: {
-                        color: recording ? (cancel ? "var(--status-danger)" : "var(--red-400)") : undefined,
-                        transform: recording && !cancel ? "scale(1.15)" : undefined,
-                        transition: "transform 0.1s"
-                    }
-                }}
-            >
-                <MicIcon />
-            </ChatBarButton>
-
-            {recording && (
-                <div style={{
-                    position: "absolute",
-                    bottom: "100%",
-                    left: 0,
-                    right: 0,
-                    marginBottom: 8,
-                    background: cancel ? "var(--info-danger-background)" : "var(--background-secondary)",
-                    border: `1px solid ${cancel ? "var(--info-danger-foreground)" : "var(--border-subtle)"}`,
-                    borderRadius: 12,
-                    padding: "10px 14px",
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 12,
-                    boxShadow: "0 8px 24px rgba(0,0,0,0.3)",
-                    zIndex: 10
-                }}>
-                    <div style={{
-                        width: 12, height: 12, borderRadius: "50%",
-                        background: cancel ? "var(--status-danger)" : "var(--red-400)",
-                        animation: cancel ? undefined : "vc-pulse 1s infinite",
-                        flexShrink: 0
-                    }} />
-                    <div style={{ flex: 1 }}>
-                        <div style={{ fontWeight: 700, fontSize: 13, color: cancel ? "var(--info-danger-foreground)" : "var(--text-normal)" }}>
-                            {cancel ? "↩ Slide to cancel" : locked ? "🔒 Locked — Tap send" : "● Recording... Slide left to cancel"}
-                        </div>
-                        <div style={{ fontSize: 12, opacity: 0.7, display: "flex", gap: 8, alignItems: "center", marginTop: 2 }}>
-                            <span style={{ fontVariantNumeric: "tabular-nums", fontWeight: 600 }}>{format(elapsed)}</span>
-                            <span style={{ flex: 1, height: 12, display: "flex", gap: 2, alignItems: "center" }}>
-                                {liveBars.map((h, i) => <span key={i} style={{ flex: 1, height: `${h}px`, background: cancel ? "var(--status-danger)" : "var(--brand-500)", borderRadius: 99, opacity: 0.9 }} />)}
-                            </span>
-                            {!locked && <span style={{ fontSize: 11, opacity: 0.6 }}>Hold & release</span>}
-                        </div>
-                    </div>
-                    <div style={{ display: "flex", gap: 6 }}>
-                        <Button size={Button.Sizes.TINY} color={Button.Colors.RED} onClick={() => stopRecording(true)}>Cancel</Button>
-                        {locked ? <Button size={Button.Sizes.TINY} color={Button.Colors.GREEN} onClick={() => stopRecording(false)}>Send</Button> : <Button size={Button.Sizes.TINY} look={Button.Looks.LINK} onClick={() => setLocked(true)}>🔒 Lock</Button>}
-                    </div>
-                </div>
-            )}
-            {previewBlob && previewUrl && !recording && (
-                <div style={{
-                    position: "absolute",
-                    bottom: "100%",
-                    left: 0,
-                    right: 0,
-                    marginBottom: 8,
-                    background: "var(--background-secondary)",
-                    border: "1px solid var(--border-subtle)",
-                    borderRadius: 12,
-                    padding: "10px 14px",
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 12,
-                    boxShadow: "0 8px 24px rgba(0,0,0,0.3)",
-                    zIndex: 10
-                }}>
-                    <Button size={Button.Sizes.TINY} onClick={() => {
-                        if (!audioRef.current) { const a = new Audio(previewUrl); audioRef.current = a; a.onended = () => setIsPlaying(false); a.onplay = () => setIsPlaying(true); a.onpause = () => setIsPlaying(false); }
-                        if (isPlaying) { audioRef.current.pause(); } else { audioRef.current.play(); }
-                    }}>{isPlaying ? "⏸" : "▶"}</Button>
-                    <div style={{ flex: 1, height: 24, display: "flex", gap: 2, alignItems: "center" }}>
-                        {previewWaveform ? Array.from(atob(previewWaveform)).map((c, i) => {
-                            const h = (c.charCodeAt(0) / 255) * 20 + 4;
-                            return <span key={i} style={{ flex: 1, height: `${h}px`, background: "var(--brand-500)", borderRadius: 99 }} />;
-                        }) : <span style={{ fontSize: 12, opacity: 0.6 }}>Preview — voir en direct comme sur mobile</span>}
-                    </div>
-                    <Button size={Button.Sizes.TINY} color={Button.Colors.RED} onClick={() => { if (previewUrl) URL.revokeObjectURL(previewUrl); setPreviewBlob(null); setPreviewUrl(null); setPreviewWaveform(null); if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; } }}>🗑</Button>
-                    <Button size={Button.Sizes.TINY} color={Button.Colors.GREEN} onClick={() => { if (previewBlob) sendAudio(previewBlob); if (previewUrl) URL.revokeObjectURL(previewUrl); setPreviewBlob(null); setPreviewUrl(null); setPreviewWaveform(null); }}>Send</Button>
-                </div>
-            )}
-            <style>{`@keyframes vc-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }`}</style>
-        </>
-    );
-};
-
 export default definePlugin({
     name: "MobileVoice",
-    description: "Voice messages exactly like mobile — hold mic in chat bar to record, slide to cancel, lock to continue. No more right-click menu.",
+    description: "Hold mic in chat bar to record voice messages exactly like mobile — slide to cancel, live waveform.",
     authors: [{ name: "Motata", id: 0n }],
-    tags: ["Voice", "Mobile"],
-    chatBarButton: {
-        icon: MicIcon,
-        render: MobileMicButton
+    tags: ["Voice"],
+
+    start() {
+        const STYLE_ID = "vc-mobileVoice-style";
+        if (!document.getElementById(STYLE_ID)) {
+            const s = document.createElement("style");
+            s.id = STYLE_ID;
+            s.textContent = `
+                .vc-mobile-mic { width: 44px; height: 44px; display:flex; align-items:center; justify-content:center; border-radius:50%; background: var(--background-secondary); border: 1px solid var(--border-subtle); cursor:pointer; color: var(--interactive-normal); transition: transform 0.1s, background 0.1s; }
+                .vc-mobile-mic:active { transform: scale(0.95); background: var(--brand-500); color: white; }
+                .vc-mobile-mic.recording { background: var(--red-400); color: white; animation: vc-pulse 1s infinite; }
+                .vc-mobile-mic.cancel { background: var(--status-danger); }
+                @keyframes vc-pulse { 0%,100% { opacity:1 } 50% { opacity:0.7 } }
+                .vc-mobile-overlay { position: fixed; bottom: 80px; left: 50%; transform: translateX(-50%); background: var(--background-secondary); border:1px solid var(--border-subtle); border-radius:16px; padding:12px 16px; display:flex; align-items:center; gap:12px; box-shadow:0 8px 24px rgba(0,0,0,0.4); z-index: 9999; min-width: 320px; max-width: 90vw; }
+                .vc-mobile-overlay.cancel { background: var(--info-danger-background); border-color: var(--status-danger); }
+                .vc-mobile-bars { display:flex; gap:2px; align-items:center; flex:1; height:24px; }
+                .vc-mobile-bar { flex:1; background: var(--brand-500); border-radius:99px; min-height:4px; }
+                .vc-mobile-bar.cancel { background: var(--status-danger); }
+            `;
+            document.head.appendChild(s);
+        }
+
+        let recording = false;
+        let locked = false;
+        let cancel = false;
+        let startX = 0;
+        let startY = 0;
+        let recorder: MediaRecorder | null = null;
+        let stream: MediaStream | null = null;
+        let chunks: Blob[] = [];
+        let timer: any = null;
+        let elapsed = 0;
+        let analyser: AnalyserNode | null = null;
+        let audioCtx: AudioContext | null = null;
+        let raf: number | null = null;
+        let overlay: HTMLDivElement | null = null;
+        let previewBlob: Blob | null = null;
+        let previewUrl: string | null = null;
+
+        const format = (s: number) => `${String(Math.floor(s/60)).padStart(2,"0")}:${String(s%60).padStart(2,"0")}`;
+
+        const createOverlay = () => {
+            if (overlay) overlay.remove();
+            overlay = document.createElement("div");
+            overlay.className = "vc-mobile-overlay";
+            document.body.appendChild(overlay);
+            updateOverlay();
+        };
+        const updateOverlay = () => {
+            if (!overlay) return;
+            overlay.className = cancel ? "vc-mobile-overlay cancel" : "vc-mobile-overlay";
+            overlay.innerHTML = "";
+            const dot = document.createElement("div");
+            dot.style.cssText = `width:12px;height:12px;border-radius:50%;background:${cancel ? "var(--status-danger)" : "var(--red-400)"};flex-shrink:0;`;
+            if (!cancel) dot.style.animation = "vc-pulse 1s infinite";
+            overlay.appendChild(dot);
+
+            const mid = document.createElement("div");
+            mid.style.cssText = "flex:1;display:flex;flex-direction:column;gap:4px;";
+            const title = document.createElement("div");
+            title.style.cssText = `font-weight:700;font-size:13px;color:${cancel ? "var(--info-danger-foreground)" : "var(--text-normal)"}`;
+            title.textContent = cancel ? "↩ Slide to cancel" : locked ? "🔒 Locked — tap Send" : "● Recording... Slide left to cancel";
+            mid.appendChild(title);
+
+            const row = document.createElement("div");
+            row.style.cssText = "display:flex;gap:8px;align-items:center;";
+            const time = document.createElement("span");
+            time.style.cssText = "font-variant-numeric:tabular-nums;font-weight:600;font-size:12px;";
+            time.textContent = format(elapsed);
+            row.appendChild(time);
+
+            const bars = document.createElement("div");
+            bars.className = "vc-mobile-bars";
+            bars.id = "vc-live-bars";
+            for (let i = 0; i < 24; i++) {
+                const b = document.createElement("span");
+                b.className = cancel ? "vc-mobile-bar cancel" : "vc-mobile-bar";
+                b.style.height = "6px";
+                bars.appendChild(b);
+            }
+            row.appendChild(bars);
+
+            if (!locked) {
+                const hint = document.createElement("span");
+                hint.style.cssText = "font-size:11px;opacity:0.6;white-space:nowrap;";
+                hint.textContent = "Hold";
+                row.appendChild(hint);
+            }
+            mid.appendChild(row);
+            overlay.appendChild(mid);
+
+            const btns = document.createElement("div");
+            btns.style.cssText = "display:flex;gap:6px;";
+            const cancelBtn = document.createElement("button");
+            cancelBtn.textContent = "Cancel";
+            cancelBtn.style.cssText = "padding:4px 8px;border-radius:6px;border:none;background:var(--status-danger);color:white;cursor:pointer;font-size:12px;";
+            cancelBtn.onclick = () => doCancel();
+            btns.appendChild(cancelBtn);
+            if (locked) {
+                const sendBtn = document.createElement("button");
+                sendBtn.textContent = "Send";
+                sendBtn.style.cssText = "padding:4px 8px;border-radius:6px;border:none;background:var(--green-360);color:white;cursor:pointer;font-size:12px;";
+                sendBtn.onclick = () => doSend();
+                btns.appendChild(sendBtn);
+            } else {
+                const lockBtn = document.createElement("button");
+                lockBtn.textContent = "🔒 Lock";
+                lockBtn.style.cssText = "padding:4px 8px;border-radius:6px;border:none;background:transparent;color:var(--text-normal);cursor:pointer;font-size:12px;";
+                lockBtn.onclick = () => { locked = true; updateOverlay(); };
+                btns.appendChild(lockBtn);
+            }
+            overlay.appendChild(btns);
+        };
+
+        const doCancel = () => {
+            cancel = true;
+            stopRecording(true);
+            overlay?.remove(); overlay = null;
+            showToast("Cancelled", Toasts.Type.MESSAGE);
+        };
+        const doSend = () => {
+            const blob = previewBlob || (chunks.length ? new Blob(chunks, { type: "audio/ogg; codecs=opus" }) : null);
+            if (blob && blob.size > 1000) sendAudio(blob);
+            cleanup();
+        };
+        const cleanup = () => {
+            recording = false; locked = false; cancel = false; elapsed = 0;
+            clearInterval(timer);
+            if (raf) cancelAnimationFrame(raf);
+            if (audioCtx) try { audioCtx.close(); } catch {}
+            audioCtx = null; analyser = null;
+            stream?.getTracks().forEach(t => t.stop());
+            overlay?.remove(); overlay = null;
+            if (previewUrl) URL.revokeObjectURL(previewUrl);
+            previewBlob = null; previewUrl = null;
+            recorder = null; stream = null; chunks = [];
+        };
+
+        const startRecording = async (e: MouseEvent | TouchEvent) => {
+            const cx = (e as TouchEvent).touches ? (e as TouchEvent).touches[0].clientX : (e as MouseEvent).clientX;
+            const cy = (e as TouchEvent).touches ? (e as TouchEvent).touches[0].clientY : (e as MouseEvent).clientY;
+            startX = cx; startY = cy;
+            cancel = false; locked = false;
+            createOverlay();
+            try {
+                stream = await navigator.mediaDevices.getUserMedia({ audio: true } as any);
+                // live analyser
+                try {
+                    audioCtx = new AudioContext();
+                    const src = audioCtx.createMediaStreamSource(stream);
+                    analyser = audioCtx.createAnalyser();
+                    analyser.fftSize = 256;
+                    src.connect(analyser);
+                    const data = new Uint8Array(analyser.frequencyBinCount);
+                    const tick = () => {
+                        if (!analyser || !recording) return;
+                        analyser.getByteFrequencyData(data);
+                        const barsEl = document.getElementById("vc-live-bars");
+                        if (barsEl) {
+                            const bars = barsEl.children;
+                            const step = Math.floor(data.length / bars.length);
+                            for (let i = 0; i < bars.length; i++) {
+                                const v = data[i * step] || 0;
+                                const h = 4 + (v / 255) * 18;
+                                (bars[i] as HTMLElement).style.height = h + "px";
+                            }
+                        }
+                        raf = requestAnimationFrame(tick);
+                    };
+                    tick();
+                } catch {}
+                recorder = new MediaRecorder(stream, { mimeType: "audio/ogg; codecs=opus" } as any);
+                chunks = [];
+                recorder.ondataavailable = ev => { if (ev.data.size) chunks.push(ev.data); };
+                recorder.onstop = () => {
+                    const blob = new Blob(chunks, { type: "audio/ogg; codecs=opus" });
+                    if (!cancel && blob.size > 1000) {
+                        // show preview like mobile
+                        previewBlob = blob;
+                        previewUrl = URL.createObjectURL(blob);
+                        if (overlay) {
+                            overlay.innerHTML = "";
+                            const playBtn = document.createElement("button");
+                            playBtn.textContent = "▶";
+                            playBtn.style.cssText = "width:32px;height:32px;border-radius:50%;border:none;background:var(--brand-500);color:white;cursor:pointer;";
+                            let audio: HTMLAudioElement | null = null;
+                            let playing = false;
+                            playBtn.onclick = () => {
+                                if (!audio) { audio = new Audio(previewUrl!); audio.onended = () => { playing = false; playBtn.textContent = "▶"; }; }
+                                if (playing) { audio.pause(); playing = false; playBtn.textContent = "▶"; } else { audio.play(); playing = true; playBtn.textContent = "⏸"; }
+                            };
+                            overlay.appendChild(playBtn);
+                            const info = document.createElement("div");
+                            info.style.cssText = "flex:1;font-size:13px;font-weight:600;";
+                            info.textContent = "Preview — Tap Send to send like mobile";
+                            overlay.appendChild(info);
+                            const del = document.createElement("button");
+                            del.textContent = "🗑";
+                            del.style.cssText = "padding:6px 10px;border-radius:6px;border:none;background:var(--status-danger);color:white;cursor:pointer;";
+                            del.onclick = () => { if (previewUrl) URL.revokeObjectURL(previewUrl); previewBlob = null; previewUrl = null; overlay?.remove(); overlay = null; };
+                            const send = document.createElement("button");
+                            send.textContent = "Send";
+                            send.style.cssText = "padding:6px 12px;border-radius:6px;border:none;background:var(--green-360);color:white;cursor:pointer;font-weight:700;";
+                            send.onclick = () => doSend();
+                            overlay.appendChild(del);
+                            overlay.appendChild(send);
+                            return;
+                        }
+                        sendAudio(blob);
+                    }
+                    cleanup();
+                };
+                recorder.start();
+                recording = true;
+                const start = Date.now();
+                timer = setInterval(() => { elapsed = Math.floor((Date.now() - start) / 1000); updateOverlay(); }, 100);
+            } catch (err: any) {
+                showToast("Microphone permission missing — Allow mic in Windows + Discord Voice settings", Toasts.Type.FAILURE);
+                overlay?.remove(); overlay = null;
+            }
+        };
+
+        const onMove = (e: MouseEvent | TouchEvent) => {
+            if (!recording || locked) return;
+            const x = (e as TouchEvent).touches ? (e as TouchEvent).touches[0].clientX : (e as MouseEvent).clientX;
+            const deltaX = startX - x;
+            const y = (e as TouchEvent).touches ? (e as TouchEvent).touches[0].clientY : (e as MouseEvent).clientY;
+            if (deltaX > 70) cancel = true; else cancel = false;
+            if (startY - y > 80) { locked = true; }
+            updateOverlay();
+        };
+        const onUp = () => {
+            if (!recording) return;
+            if (!locked) {
+                if (recorder && recorder.state === "recording") recorder.stop();
+                else cleanup();
+            }
+            window.removeEventListener("mousemove", onMove as any);
+            window.removeEventListener("mouseup", onUp);
+            window.removeEventListener("touchmove", onMove as any);
+            window.removeEventListener("touchend", onUp);
+        };
+
+        const injectButton = () => {
+            const bar = document.querySelector('[class*="channelTextArea"]') || document.querySelector('[class*="chatContent"]');
+            if (!bar || document.getElementById("vc-mobile-mic-btn")) return;
+            const container = bar.querySelector('[class*="buttons"]') || bar.querySelector('[class*="inner"]') || bar;
+            if (!container) return;
+            const btn = document.createElement("button");
+            btn.id = "vc-mobile-mic-btn";
+            btn.className = "vc-mobile-mic";
+            btn.title = "Hold to record — Like mobile";
+            btn.innerHTML = `<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Z"/><path d="M17 11a5 5 0 0 1-10 0M12 16v4M8 20h8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" fill="none"/></svg>`;
+            btn.onmousedown = (e) => { e.preventDefault(); startRecording(e); window.addEventListener("mousemove", onMove as any); window.addEventListener("mouseup", onUp); };
+            btn.ontouchstart = (e) => { startRecording(e); window.addEventListener("touchmove", onMove as any); window.addEventListener("touchend", onUp); };
+            // Insert before send button or append
+            const sendBtn = container.querySelector('[class*="sendButton"]');
+            if (sendBtn) container.insertBefore(btn, sendBtn);
+            else container.appendChild(btn);
+        };
+
+        const obs = new MutationObserver(() => injectButton());
+        obs.observe(document.body, { childList: true, subtree: true });
+        injectButton();
+        (this as any)._obs = obs;
+        (this as any)._cleanup = cleanup;
+    },
+
+    stop() {
+        (this as any)._obs?.disconnect();
+        (this as any)._cleanup?.();
+        document.getElementById("vc-mobileVoice-style")?.remove();
+        document.getElementById("vc-mobile-mic-btn")?.remove();
+        document.querySelector(".vc-mobile-overlay")?.remove();
     }
 });
