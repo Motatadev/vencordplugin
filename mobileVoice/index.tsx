@@ -1,6 +1,6 @@
 import { Devs } from "@utils/constants";
 import definePlugin from "@utils/types";
-import { Button, Constants, FluxDispatcher, RestAPI, SelectedChannelStore, SnowflakeUtils, Toasts, showToast } from "@webpack/common";
+import { Button, Constants, FluxDispatcher, RestAPI, SelectedChannelStore, SnowflakeUtils, Toasts, showToast, MediaEngineStore } from "@webpack/common";
 import { findLazy } from "@webpack";
 import { CloudUpload as TCloudUpload } from "@vencord/discord-types";
 import { CloudUploadPlatform } from "@vencord/discord-types/enums";
@@ -8,6 +8,7 @@ import { PermissionStore, PermissionsBits } from "@webpack/common";
 import { PendingReplyStore, MessageActions } from "@webpack/common";
 
 const CloudUpload: typeof TCloudUpload = findLazy(m => m.prototype?.trackUploadFinished);
+const Native = (typeof VencordNative !== "undefined" ? (VencordNative as any).pluginHelpers?.VoiceMessages : null) as any;
 
 function sendAudio(blob: Blob) {
     const channelId = SelectedChannelStore.getChannelId();
@@ -204,6 +205,29 @@ export default definePlugin({
             startX = cx; startY = cy;
             cancel = false; locked = false;
             createOverlay();
+            console.log("[MobileVoice] startRecording", { isDesktop: typeof IS_DISCORD_DESKTOP !== "undefined" && (IS_DISCORD_DESKTOP as any), hasNative: typeof DiscordNative !== "undefined" });
+            // Desktop native first (fixes permission missing on Electron)
+            if (typeof IS_DISCORD_DESKTOP !== "undefined" && (IS_DISCORD_DESKTOP as any) && typeof DiscordNative !== "undefined") {
+                try {
+                    const discordVoice = (DiscordNative as any).nativeModules.requireModule("discord_voice");
+                    const deviceId = MediaEngineStore.getInputDeviceId();
+                    console.log("[MobileVoice] trying native recorder", deviceId);
+                    discordVoice.startLocalAudioRecording({ echoCancellation: true, noiseCancellation: true, deviceId }, (success: boolean) => {
+                        console.log("[MobileVoice] native start result", success);
+                        if (!success) {
+                            showToast("Failed to start native recording — check Windows mic privacy + Discord Voice input", Toasts.Type.FAILURE);
+                            overlay?.remove(); overlay = null;
+                            return;
+                        }
+                        recording = true;
+                        const start = Date.now();
+                        timer = setInterval(() => { elapsed = Math.floor((Date.now() - start) / 1000); updateOverlay(); }, 100);
+                        (recorder as any) = "native" as any;
+                    });
+                    recording = true; // optimistic
+                    return;
+                } catch (err) { console.error("[MobileVoice] native failed, fallback", err); }
+            }
             try {
                 stream = await navigator.mediaDevices.getUserMedia({ audio: true } as any);
                 // live analyser
@@ -292,9 +316,42 @@ export default definePlugin({
             updateOverlay();
         };
         const onUp = () => {
-            if (!recording) return;
+            if (!recording && !previewBlob) return;
             if (!locked) {
-                if (recorder && recorder.state === "recording") recorder.stop();
+                if ((recorder as any) === "native" && typeof DiscordNative !== "undefined") {
+                    try {
+                        const discordVoice = (DiscordNative as any).nativeModules.requireModule("discord_voice");
+                        discordVoice.stopLocalAudioRecording(async (filePath: string) => {
+                            console.log("[MobileVoice] native stop file", filePath);
+                            if (filePath && Native) {
+                                try {
+                                    const buf = await Native.readRecording(filePath);
+                                    if (buf) {
+                                        const blob = new Blob([buf], { type: "audio/ogg; codecs=opus" });
+                                        if (cancel || blob.size < 800) { cleanup(); overlay?.remove(); overlay=null; return; }
+                                        previewBlob = blob; previewUrl = URL.createObjectURL(blob);
+                                        // show preview overlay
+                                        if (overlay) { overlay.remove(); overlay = null; }
+                                        const prev = document.createElement("div");
+                                        prev.className = "vc-mobile-overlay";
+                                        prev.style.cssText = "position:fixed;bottom:80px;left:50%;transform:translateX(-50%);background:var(--background-secondary);border:1px solid var(--border-subtle);border-radius:16px;padding:10px 14px;display:flex;gap:12px;align-items:center;box-shadow:0 8px 24px rgba(0,0,0,0.4);z-index:9999;min-width:320px;";
+                                        prev.innerHTML = `<button style="width:32px;height:32px;border-radius:50%;border:none;background:var(--brand-500);color:white;cursor:pointer;">▶</button><div style="flex:1;font-size:13px;font-weight:600;">Preview — tap Send</div><button style="padding:6px 10px;border-radius:6px;border:none;background:var(--status-danger);color:white;cursor:pointer;">🗑</button><button style="padding:6px 12px;border-radius:6px;border:none;background:var(--green-360);color:white;cursor:pointer;font-weight:700;">Send</button>`;
+                                        const [playBtn, , delBtn, sendBtn] = [prev.children[0] as any, prev.children[1], prev.children[2] as any, prev.children[3] as any];
+                                        let audio: HTMLAudioElement | null = null; let playing=false;
+                                        playBtn.onclick = () => { if (!audio) { audio=new Audio(previewUrl!); audio.onended=()=>{playing=false; playBtn.textContent="▶";}; } if(playing){audio.pause(); playing=false; playBtn.textContent="▶";} else {audio.play(); playing=true; playBtn.textContent="⏸";} };
+                                        delBtn.onclick = () => { if(previewUrl) URL.revokeObjectURL(previewUrl); previewBlob=null; previewUrl=null; prev.remove(); cleanup(); };
+                                        sendBtn.onclick = () => { if(previewBlob) sendAudio(previewBlob); if(previewUrl) URL.revokeObjectURL(previewUrl); prev.remove(); cleanup(); };
+                                        document.body.appendChild(prev); overlay = prev as any;
+                                        recording=false; locked=false; elapsed=0; cancel=false;
+                                    } else showToast("Failed to read recording", Toasts.Type.FAILURE);
+                                } catch (e) { console.error(e); showToast("Failed to read recording", Toasts.Type.FAILURE); }
+                            } else showToast("Native helper missing — enable VoiceMessages plugin", Toasts.Type.FAILURE);
+                            recording=false; locked=false;
+                        });
+                        return;
+                    } catch (e) { console.error(e); }
+                }
+                if (recorder && (recorder as any).state === "recording") recorder.stop();
                 else cleanup();
             }
             window.removeEventListener("mousemove", onMove as any);
