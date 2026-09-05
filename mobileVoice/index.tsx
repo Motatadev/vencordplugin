@@ -181,9 +181,10 @@ const MobileMicButton: ChatBarButtonFactory = ({ channel }) => {
         <>
             <ChatBarButton
                 tooltip={recording ? (cancel ? "Release to cancel" : "Release to send — Slide left to cancel") : "Hold to record — Like mobile"}
-                onMouseDown={startRecording}
-                onTouchStart={startRecording}
+                onClick={e => e.preventDefault()}
                 buttonProps={{
+                    onMouseDown: startRecording,
+                    onTouchStart: startRecording,
                     style: {
                         color: recording ? (cancel ? "var(--status-danger)" : "var(--red-400)") : undefined,
                         transform: recording && !cancel ? "scale(1.15)" : undefined,
