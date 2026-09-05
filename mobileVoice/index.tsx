@@ -50,14 +50,18 @@ export default definePlugin({
             const s = document.createElement("style");
             s.id = STYLE_ID;
             s.textContent = `
-                .vc-mobile-mic { width: 44px; height: 44px; display:flex; align-items:center; justify-content:center; border-radius:50%; background: var(--background-secondary); border: 1px solid var(--border-subtle); cursor:pointer; color: var(--interactive-normal); transition: transform 0.1s, background 0.1s; flex-shrink:0; }
-                .vc-mobile-mic:active { transform: scale(0.95); background: var(--brand-500); color: white; }
-                .vc-mobile-mic.recording { background: var(--red-400); color: white; animation: vc-pulse 1s infinite; }
-                .vc-mobile-overlay { position: fixed; bottom: 80px; left: 50%; transform: translateX(-50%); background: #2b2d31; border:1px solid #1e1f22; border-radius:18px; padding:10px 14px; display:flex; align-items:center; gap:12px; box-shadow:0 8px 24px rgba(0,0,0,0.5); z-index:9999; min-width:320px; max-width:90vw; height:56px; box-sizing:border-box; }
+                /* Exact mobile copy - mic button 32px #2b2d31 */
+                .vc-mobile-mic { width: 32px; height: 32px; display:flex; align-items:center; justify-content:center; border-radius:50%; background: #2b2d31; border: none; cursor:pointer; color: white; transition: all 0.12s; flex-shrink:0; box-shadow: 0 1px 2px rgba(0,0,0,0.2); }
+                .vc-mobile-mic:active { transform: scale(0.92); background: #404249; }
+                .vc-mobile-mic.recording { background: #ed4245; animation: vc-pulse 1s infinite; }
+                /* Mobile recording bar - 56px #2b2d31 #1e1f22 24px radius like mobile */
+                .vc-mobile-overlay { position: fixed; bottom: 88px; left: 50%; transform: translateX(-50%); background: #313338; border: 1px solid #1e1f22; border-radius: 24px; padding: 0 16px; display:flex; align-items:center; gap:12px; box-shadow: 0 8px 24px rgba(0,0,0,0.4), 0 0 0 1px rgba(0,0,0,0.1); z-index:9999; min-width:340px; max-width:92vw; height:48px; box-sizing:border-box; }
                 .vc-mobile-overlay.cancel { background: #3a1f1f; border-color: #ed4245; }
-                .vc-mobile-bars { display:flex; gap:2px; align-items:center; flex:1; height:24px; }
-                .vc-mobile-bar { flex:1; background: #80848e; border-radius:99px; min-height:4px; }
-                @keyframes vc-pulse { 0%,100% { opacity:1 } 50% { opacity:0.7 } }
+                .vc-mobile-bars { display:flex; gap:2px; align-items:center; flex:1; height:20px; }
+                .vc-mobile-bar { flex:1; background: #80848e; border-radius:99px; min-height:3px; max-height:18px; }
+                .vc-mobile-lock { position: fixed; bottom: 150px; left: 50%; transform: translateX(-50%); background: #2b2d31; border: 1px solid #1e1f22; border-radius: 12px; padding: 8px 12px; display:flex; flex-direction:column; align-items:center; gap:4px; box-shadow:0 4px 12px rgba(0,0,0,0.3); z-index:9998; }
+                .vc-mobile-lock-line { width:2px; height:24px; background: repeating-linear-gradient(to bottom, #80848e 0 4px, transparent 4px 8px); }
+                @keyframes vc-pulse { 0%,100% { opacity:1; transform: scale(1); } 50% { opacity:0.8; transform: scale(1.05); } }
             `;
             document.head.appendChild(s);
         }
@@ -256,8 +260,23 @@ export default definePlugin({
         const onMove = (e:any) => {
             if(!recording || locked) return;
             const x = e.touches ? e.touches[0].clientX : e.clientX;
+            const y = e.touches ? e.touches[0].clientY : e.clientY;
             const d = startX - x;
             if(d>70) cancel=true; else cancel=false;
+            // Slide up to lock like mobile - show lock with dashed line
+            if(startY - y > 60) {
+                locked=true;
+                // Show lock indicator above overlay like mobile
+                let lockEl = document.getElementById("vc-mobile-lock");
+                if(!lockEl){
+                    lockEl=document.createElement("div");
+                    lockEl.id="vc-mobile-lock";
+                    lockEl.className="vc-mobile-lock";
+                    lockEl.innerHTML=`<div style="font-size:18px;">🔒</div><div class="vc-mobile-lock-line"></div><div style="font-size:10px;opacity:0.7;">Swipe up to lock</div>`;
+                    document.body.appendChild(lockEl);
+                    setTimeout(()=>{ lockEl?.remove(); }, 800);
+                }
+            }
             updateOverlay();
         };
         const onUp = () => {
