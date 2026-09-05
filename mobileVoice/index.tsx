@@ -304,32 +304,68 @@ export default definePlugin({
         };
 
         const injectButton = () => {
-            const bar = document.querySelector('[class*="channelTextArea"]') || document.querySelector('[class*="chatContent"]');
-            if (!bar || document.getElementById("vc-mobile-mic-btn")) return;
-            const container = bar.querySelector('[class*="buttons"]') || bar.querySelector('[class*="inner"]') || bar;
-            if (!container) return;
+            if (document.getElementById("vc-mobile-mic-btn")) return;
+            // Try many selectors like mobile chat bar - Discord's classes are hashed, so try multiple
+            const candidates = [
+                '[class*="channelTextArea"]',
+                '[class*="chatContent"] form',
+                'form[class*="form"]',
+                '[class*="textArea"]',
+                '[class*="scrollableContainer"]',
+                'div[role="textbox"]',
+            ];
+            let bar: Element | null = null;
+            for (const sel of candidates) {
+                bar = document.querySelector(sel);
+                if (bar) break;
+            }
+            if (!bar) {
+                // Fallback: find any textbox
+                const tb = document.querySelector('div[role="textbox"]');
+                if (tb) bar = tb.closest('form') || tb.parentElement?.parentElement || tb as any;
+            }
+            if (!bar) return;
+            // Find container for buttons
+            let container: Element | null = bar.closest('[class*="channelTextArea"]') || bar.closest('form') || bar as any;
+            if (!container || container === document.body) container =bar as any;
+            // Try to find inner buttons area
+            const inner = (container as any).querySelector?.('[class*="buttons"]') || (container as any).querySelector?.('[class*="inner"]') || container;
+            const target = inner as HTMLElement;
+            if (!target || target.querySelector("#vc-mobile-mic-btn")) return;
+
+            console.log("[MobileVoice] Injecting mic button into", target);
             const btn = document.createElement("button");
             btn.id = "vc-mobile-mic-btn";
             btn.className = "vc-mobile-mic";
-            btn.title = "Hold to record — Like mobile";
+            btn.title = "Hold to record — Like mobile (mic permission granted?)";
             btn.innerHTML = `<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Z"/><path d="M17 11a5 5 0 0 1-10 0M12 16v4M8 20h8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" fill="none"/></svg>`;
-            btn.onmousedown = (e) => { e.preventDefault(); startRecording(e); window.addEventListener("mousemove", onMove as any); window.addEventListener("mouseup", onUp); };
-            btn.ontouchstart = (e) => { startRecording(e); window.addEventListener("touchmove", onMove as any); window.addEventListener("touchend", onUp); };
-            // Insert before send button or append
-            const sendBtn = container.querySelector('[class*="sendButton"]');
-            if (sendBtn) container.insertBefore(btn, sendBtn);
-            else container.appendChild(btn);
+            btn.onmousedown = (e) => { console.log("[MobileVoice] mousedown"); e.preventDefault(); startRecording(e); window.addEventListener("mousemove", onMove as any); window.addEventListener("mouseup", onUp); };
+            btn.ontouchstart = (e) => { console.log("[MobileVoice] touchstart"); startRecording(e); window.addEventListener("touchmove", onMove as any); window.addEventListener("touchend", onUp); };
+            btn.onclick = (e) => { e.preventDefault(); console.log("[MobileVoice] click - if you see this, injection works but hold failed"); };
+            // Insert near send button or at end
+            const sendBtn = target.querySelector('[class*="sendButton"]') || target.querySelector('button[type="submit"]');
+            try {
+                if (sendBtn && sendBtn.parentElement) sendBtn.parentElement.insertBefore(btn, sendBtn);
+                else target.appendChild(btn);
+            } catch { target.appendChild(btn); }
+            console.log("[MobileVoice] Button injected!");
         };
 
         const obs = new MutationObserver(() => injectButton());
         obs.observe(document.body, { childList: true, subtree: true });
+        // Try every second too (fallback if observer misses)
+        const interval = setInterval(injectButton, 1000);
         injectButton();
+        setTimeout(injectButton, 500);
+        setTimeout(injectButton, 1500);
         (this as any)._obs = obs;
-        (this as any)._cleanup = cleanup;
+        (this as any)._interval = interval;
+        (this as any)._cleanup = () => { cleanup(); clearInterval(interval); };
     },
 
     stop() {
         (this as any)._obs?.disconnect();
+        clearInterval((this as any)._interval);
         (this as any)._cleanup?.();
         document.getElementById("vc-mobileVoice-style")?.remove();
         document.getElementById("vc-mobile-mic-btn")?.remove();
