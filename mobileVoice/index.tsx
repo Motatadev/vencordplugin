@@ -89,11 +89,20 @@ const MobileMicButton: ChatBarButtonFactory = ({ channel }) => {
     const [locked, setLocked] = useState(false);
     const [elapsed, setElapsed] = useState(0);
     const [cancel, setCancel] = useState(false);
+    const [liveBars, setLiveBars] = useState<number[]>(Array(32).fill(4));
+    const [previewBlob, setPreviewBlob] = useState<Blob | null>(null);
+    const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+    const [previewWaveform, setPreviewWaveform] = useState<string | null>(null);
+    const [isPlaying, setIsPlaying] = useState(false);
     const recorderRef = useRef<MediaRecorder | null>(null);
     const chunksRef = useRef<Blob[]>([]);
     const timerRef = useRef<any>(null);
     const streamRef = useRef<MediaStream | null>(null);
     const startXRef = useRef(0);
+    const analyserRef = useRef<AnalyserNode | null>(null);
+    const audioCtxRef = useRef<AudioContext | null>(null);
+    const rafRef = useRef<number | null>(null);
+    const audioRef = useRef<HTMLAudioElement | null>(null);
 
     // Check perms
     if (channel?.guild_id && !(PermissionStore.can(PermissionsBits.SEND_VOICE_MESSAGES, channel) && PermissionStore.can(PermissionsBits.SEND_MESSAGES, channel))) return null;
@@ -130,17 +139,63 @@ const MobileMicButton: ChatBarButtonFactory = ({ channel }) => {
             }
         }
 
-        // Web / fallback
+        // Web / fallback with live waveform
         try {
             const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, deviceId: MediaEngineStore.getInputDeviceId() } as any });
             streamRef.current = stream;
+            // live analyser
+            try {
+                const ctx = new AudioContext();
+                audioCtxRef.current = ctx;
+                const src = ctx.createMediaStreamSource(stream);
+                const analyser = ctx.createAnalyser();
+                analyser.fftSize = 256;
+                src.connect(analyser);
+                analyserRef.current = analyser;
+                const data = new Uint8Array(analyser.frequencyBinCount);
+                const tick = () => {
+                    if (!analyserRef.current) return;
+                    analyser.getByteFrequencyData(data);
+                    const bars = [];
+                    const step = Math.floor(data.length / 32);
+                    for (let i = 0; i < 32; i++) {
+                        const v = data[i * step] || 0;
+                        bars.push(4 + (v / 255) * 20);
+                    }
+                    setLiveBars(bars);
+                    rafRef.current = requestAnimationFrame(tick);
+                };
+                tick();
+            } catch {}
             const rec = new MediaRecorder(stream, { mimeType: 'audio/ogg; codecs=opus' } as any);
             chunksRef.current = [];
             rec.ondataavailable = ev => { if (ev.data.size) chunksRef.current.push(ev.data); };
             rec.onstop = () => {
+                if (rafRef.current) cancelAnimationFrame(rafRef.current);
+                if (audioCtxRef.current) { try { audioCtxRef.current.close(); } catch {} audioCtxRef.current = null; }
+                analyserRef.current = null;
+                setLiveBars(Array(32).fill(4));
                 const blob = new Blob(chunksRef.current, { type: 'audio/ogg; codecs=opus' });
                 stream.getTracks().forEach(t => t.stop());
-                if (!cancel && blob.size > 1000) sendAudio(blob);
+                if (cancel || blob.size < 1000) {
+                    setRecording(false); setLocked(false); setElapsed(0); setCancel(false); clearInterval(timerRef.current); return;
+                }
+                // Show preview like mobile - voir en direct
+                const url = URL.createObjectURL(blob);
+                setPreviewBlob(blob);
+                setPreviewUrl(url);
+                // waveform for preview
+                (async () => {
+                    try {
+                        const ctx2 = new AudioContext();
+                        const buf = await ctx2.decodeAudioData(await blob.arrayBuffer());
+                        const data2 = buf.getChannelData(0);
+                        const bins = new Uint8Array(Math.min(32, Math.floor(buf.duration * 10)));
+                        const spb = Math.floor(data2.length / bins.length);
+                        for (let i = 0; i < bins.length; i++) { let sum=0; for(let j=0;j<spb;j++) sum+= data2[i*spb+j]**2; bins[i]=Math.min(255, Math.sqrt(sum/spb)*255); }
+                        setPreviewWaveform(btoa(String.fromCharCode(...bins)));
+                    } catch { setPreviewWaveform(null); }
+                })();
                 setRecording(false);
                 setLocked(false);
                 setElapsed(0);
@@ -171,11 +226,22 @@ const MobileMicButton: ChatBarButtonFactory = ({ channel }) => {
                             const buf = await Native.readRecording(filePath);
                             if (buf) {
                                 const blob = new Blob([buf], { type: "audio/ogg; codecs=opus" });
-                                if (!isCancel && blob.size > 1000) sendAudio(blob);
+                                if (isCancel || blob.size < 1000) { setRecording(false); setLocked(false); setElapsed(0); setCancel(false); (recorderRef as any).current = null; return; }
+                                const url = URL.createObjectURL(blob);
+                                setPreviewBlob(blob);
+                                setPreviewUrl(url);
+                                try {
+                                    const ctx2 = new AudioContext();
+                                    const buf2 = await ctx2.decodeAudioData(await blob.slice().arrayBuffer());
+                                    const data2 = buf2.getChannelData(0);
+                                    const bins = new Uint8Array(Math.min(32, Math.floor(buf2.duration * 10)));
+                                    const spb = Math.floor(data2.length / bins.length);
+                                    for (let i = 0; i < bins.length; i++) { let sum=0; for(let j=0;j<spb;j++) sum+= data2[i*spb+j]**2; bins[i]=Math.min(255, Math.sqrt(sum/spb)*255); }
+                                    setPreviewWaveform(btoa(String.fromCharCode(...bins)));
+                                } catch { setPreviewWaveform(null); }
                             } else showToast("Failed to read recording", Toasts.Type.FAILURE);
                         } catch { showToast("Failed to read recording", Toasts.Type.FAILURE); }
                     } else if (filePath) {
-                        // fallback: try to read via fetch if Native not available (should not happen)
                         showToast("Native helper missing — enable VoiceMessages plugin too", Toasts.Type.FAILURE);
                     }
                     setRecording(false);
@@ -280,16 +346,47 @@ const MobileMicButton: ChatBarButtonFactory = ({ channel }) => {
                         </div>
                         <div style={{ fontSize: 12, opacity: 0.7, display: "flex", gap: 8, alignItems: "center", marginTop: 2 }}>
                             <span style={{ fontVariantNumeric: "tabular-nums", fontWeight: 600 }}>{format(elapsed)}</span>
-                            <span style={{ flex: 1, height: 4, background: "var(--background-tertiary)", borderRadius: 99, overflow: "hidden", display: "flex" }}>
-                                <span style={{ width: `${Math.min(100, (elapsed % 10) * 10)}%`, background: cancel ? "var(--status-danger)" : "var(--brand-500)", transition: "width 0.1s" }} />
+                            <span style={{ flex: 1, height: 12, display: "flex", gap: 2, alignItems: "center" }}>
+                                {liveBars.map((h, i) => <span key={i} style={{ flex: 1, height: `${h}px`, background: cancel ? "var(--status-danger)" : "var(--brand-500)", borderRadius: 99, opacity: 0.9 }} />)}
                             </span>
-                            {!locked && <span style={{ fontSize: 11, opacity: 0.6 }}>Hold & release to send</span>}
+                            {!locked && <span style={{ fontSize: 11, opacity: 0.6 }}>Hold & release</span>}
                         </div>
                     </div>
                     <div style={{ display: "flex", gap: 6 }}>
                         <Button size={Button.Sizes.TINY} color={Button.Colors.RED} onClick={() => stopRecording(true)}>Cancel</Button>
                         {locked ? <Button size={Button.Sizes.TINY} color={Button.Colors.GREEN} onClick={() => stopRecording(false)}>Send</Button> : <Button size={Button.Sizes.TINY} look={Button.Looks.LINK} onClick={() => setLocked(true)}>🔒 Lock</Button>}
                     </div>
+                </div>
+            )}
+            {previewBlob && previewUrl && !recording && (
+                <div style={{
+                    position: "absolute",
+                    bottom: "100%",
+                    left: 0,
+                    right: 0,
+                    marginBottom: 8,
+                    background: "var(--background-secondary)",
+                    border: "1px solid var(--border-subtle)",
+                    borderRadius: 12,
+                    padding: "10px 14px",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 12,
+                    boxShadow: "0 8px 24px rgba(0,0,0,0.3)",
+                    zIndex: 10
+                }}>
+                    <Button size={Button.Sizes.TINY} onClick={() => {
+                        if (!audioRef.current) { const a = new Audio(previewUrl); audioRef.current = a; a.onended = () => setIsPlaying(false); a.onplay = () => setIsPlaying(true); a.onpause = () => setIsPlaying(false); }
+                        if (isPlaying) { audioRef.current.pause(); } else { audioRef.current.play(); }
+                    }}>{isPlaying ? "⏸" : "▶"}</Button>
+                    <div style={{ flex: 1, height: 24, display: "flex", gap: 2, alignItems: "center" }}>
+                        {previewWaveform ? Array.from(atob(previewWaveform)).map((c, i) => {
+                            const h = (c.charCodeAt(0) / 255) * 20 + 4;
+                            return <span key={i} style={{ flex: 1, height: `${h}px`, background: "var(--brand-500)", borderRadius: 99 }} />;
+                        }) : <span style={{ fontSize: 12, opacity: 0.6 }}>Preview — voir en direct comme sur mobile</span>}
+                    </div>
+                    <Button size={Button.Sizes.TINY} color={Button.Colors.RED} onClick={() => { if (previewUrl) URL.revokeObjectURL(previewUrl); setPreviewBlob(null); setPreviewUrl(null); setPreviewWaveform(null); if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; } }}>🗑</Button>
+                    <Button size={Button.Sizes.TINY} color={Button.Colors.GREEN} onClick={() => { if (previewBlob) sendAudio(previewBlob); if (previewUrl) URL.revokeObjectURL(previewUrl); setPreviewBlob(null); setPreviewUrl(null); setPreviewWaveform(null); }}>Send</Button>
                 </div>
             )}
             <style>{`@keyframes vc-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }`}</style>
